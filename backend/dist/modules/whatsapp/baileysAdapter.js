@@ -1,0 +1,344 @@
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.BaileysAdapter = void 0;
+const baileys_1 = __importStar(require("@whiskeysockets/baileys"));
+const pino_1 = __importDefault(require("pino"));
+const qrcode_1 = __importDefault(require("qrcode"));
+const fs_1 = __importDefault(require("fs"));
+const index_js_1 = require("../../config/index.js");
+const normalizer_js_1 = require("../../utils/normalizer.js");
+class BaileysAdapter {
+    socket = null;
+    status = 'disconnected';
+    qrCode = null;
+    jid = null;
+    phone = null;
+    pushName = null;
+    incomingHandlers = [];
+    connectionChangeHandlers = [];
+    reconnectAttempts = 0;
+    maxAutoReconnectAttempts = 5;
+    isExplicitDisconnect = false;
+    async init() {
+        // Session directory
+        if (!fs_1.default.existsSync(index_js_1.config.storage.sessionsDir)) {
+            fs_1.default.mkdirSync(index_js_1.config.storage.sessionsDir, { recursive: true });
+        }
+    }
+    getAccountInfo() {
+        return {
+            jid: this.jid,
+            phone: this.phone,
+            name: this.pushName,
+            status: this.status,
+            qrCode: this.qrCode
+        };
+    }
+    onIncomingMessage(handler) {
+        this.incomingHandlers.push(handler);
+    }
+    onConnectionChange(handler) {
+        this.connectionChangeHandlers.push(handler);
+    }
+    notifyConnectionChange() {
+        const info = this.getAccountInfo();
+        for (const handler of this.connectionChangeHandlers) {
+            try {
+                handler(info);
+            }
+            catch (e) {
+                console.error('Error in connectionChange handler:', e);
+            }
+        }
+    }
+    async connect() {
+        this.isExplicitDisconnect = false;
+        this.status = 'connecting';
+        this.notifyConnectionChange();
+        try {
+            const { state, saveCreds } = await (0, baileys_1.useMultiFileAuthState)(index_js_1.config.storage.sessionsDir);
+            const { version } = await (0, baileys_1.fetchLatestBaileysVersion)();
+            this.socket = (0, baileys_1.default)({
+                version,
+                logger: (0, pino_1.default)({ level: 'silent' }),
+                printQRInTerminal: false,
+                auth: state,
+                generateHighQualityLinkPreview: false,
+                browser: ['WA Blast Manager Pro', 'Chrome', '124.0.0']
+            });
+            this.socket.ev.on('creds.update', saveCreds);
+            this.socket.ev.on('connection.update', async (update) => {
+                const { connection, lastDisconnect, qr } = update;
+                if (qr) {
+                    try {
+                        this.qrCode = await qrcode_1.default.toDataURL(qr);
+                        this.status = 'connecting';
+                        this.notifyConnectionChange();
+                    }
+                    catch (err) {
+                        console.error('Error generating QR code data URL:', err);
+                    }
+                }
+                if (connection === 'close') {
+                    this.qrCode = null;
+                    const statusCode = lastDisconnect?.error?.output?.statusCode;
+                    const isLoggedOut = statusCode === baileys_1.DisconnectReason.loggedOut;
+                    if (isLoggedOut) {
+                        this.status = 'logged_out';
+                        this.jid = null;
+                        this.phone = null;
+                        this.pushName = null;
+                        this.notifyConnectionChange();
+                        // Clear session files on logout
+                        try {
+                            if (fs_1.default.existsSync(index_js_1.config.storage.sessionsDir)) {
+                                fs_1.default.rmSync(index_js_1.config.storage.sessionsDir, { recursive: true, force: true });
+                                fs_1.default.mkdirSync(index_js_1.config.storage.sessionsDir, { recursive: true });
+                            }
+                        }
+                        catch (e) {
+                            console.error('Failed to clear sessions dir:', e);
+                        }
+                    }
+                    else {
+                        this.status = 'disconnected';
+                        this.notifyConnectionChange();
+                        // Auto-reconnect if not explicit disconnect and not exceeded max attempts
+                        if (!this.isExplicitDisconnect && this.reconnectAttempts < this.maxAutoReconnectAttempts) {
+                            this.reconnectAttempts++;
+                            const delay = Math.min(3000 * this.reconnectAttempts, 15000);
+                            console.log(`[Baileys] Disconnected temporarily. Auto-reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxAutoReconnectAttempts})...`);
+                            setTimeout(() => {
+                                if (this.status !== 'connected' && !this.isExplicitDisconnect) {
+                                    this.connect();
+                                }
+                            }, delay);
+                        }
+                    }
+                }
+                else if (connection === 'open') {
+                    this.reconnectAttempts = 0;
+                    this.status = 'connected';
+                    this.qrCode = null;
+                    const userJid = this.socket?.user?.id || '';
+                    this.jid = userJid;
+                    this.phone = (0, normalizer_js_1.extractPhoneFromJid)(userJid);
+                    this.pushName = this.socket?.user?.name || 'WA Blast Bot';
+                    console.log(`[Baileys] WhatsApp Connected! User: ${this.phone} (${this.pushName})`);
+                    this.notifyConnectionChange();
+                }
+            });
+            // Handle incoming messages
+            this.socket.ev.on('messages.upsert', async ({ messages, type }) => {
+                if (type !== 'notify')
+                    return;
+                for (const msg of messages) {
+                    if (!msg.message || msg.key.fromMe)
+                        continue;
+                    const fromJid = msg.key.remoteJid || '';
+                    const isGroup = fromJid.endsWith('@g.us');
+                    const senderPhone = (0, normalizer_js_1.extractPhoneFromJid)(msg.key.participant || fromJid);
+                    const pushName = msg.pushName || senderPhone;
+                    let messageType = 'unknown';
+                    let text;
+                    let caption;
+                    let mediaBuffer;
+                    let fileName;
+                    let mimetype;
+                    if (msg.message.conversation) {
+                        messageType = 'text';
+                        text = msg.message.conversation;
+                    }
+                    else if (msg.message.extendedTextMessage) {
+                        messageType = 'text';
+                        text = msg.message.extendedTextMessage.text || '';
+                    }
+                    else if (msg.message.imageMessage) {
+                        messageType = 'image';
+                        caption = msg.message.imageMessage.caption || '';
+                        mimetype = msg.message.imageMessage.mimetype || 'image/jpeg';
+                        try {
+                            mediaBuffer = (await (0, baileys_1.downloadMediaMessage)(msg, 'buffer', {}));
+                        }
+                        catch (err) {
+                            console.error('Failed to download incoming image:', err);
+                        }
+                    }
+                    else if (msg.message.documentMessage) {
+                        messageType = 'document';
+                        caption = msg.message.documentMessage.caption || '';
+                        fileName = msg.message.documentMessage.fileName || 'file.bin';
+                        mimetype = msg.message.documentMessage.mimetype || 'application/octet-stream';
+                        try {
+                            mediaBuffer = (await (0, baileys_1.downloadMediaMessage)(msg, 'buffer', {}));
+                        }
+                        catch (err) {
+                            console.error('Failed to download incoming document:', err);
+                        }
+                    }
+                    const incomingPayload = {
+                        fromJid,
+                        senderPhone,
+                        pushName,
+                        isGroup,
+                        messageType,
+                        text: text || caption,
+                        caption,
+                        mediaBuffer,
+                        fileName,
+                        mimetype,
+                        rawMessage: msg
+                    };
+                    for (const handler of this.incomingHandlers) {
+                        try {
+                            await handler(incomingPayload);
+                        }
+                        catch (err) {
+                            console.error('Error in message handler:', err);
+                        }
+                    }
+                }
+            });
+        }
+        catch (err) {
+            this.status = 'disconnected';
+            this.notifyConnectionChange();
+            console.error('[Baileys] Connect error:', err);
+            throw err;
+        }
+    }
+    async disconnect() {
+        this.isExplicitDisconnect = true;
+        if (this.socket) {
+            try {
+                this.socket.end(undefined);
+            }
+            catch (e) {
+                console.error('Error ending socket:', e);
+            }
+            this.socket = null;
+        }
+        this.status = 'disconnected';
+        this.qrCode = null;
+        this.notifyConnectionChange();
+    }
+    async logout() {
+        this.isExplicitDisconnect = true;
+        if (this.socket) {
+            try {
+                await this.socket.logout();
+            }
+            catch (e) {
+                console.error('Error during Baileys logout:', e);
+            }
+            this.socket = null;
+        }
+        this.status = 'logged_out';
+        this.qrCode = null;
+        this.jid = null;
+        this.phone = null;
+        this.pushName = null;
+        this.notifyConnectionChange();
+        try {
+            if (fs_1.default.existsSync(index_js_1.config.storage.sessionsDir)) {
+                fs_1.default.rmSync(index_js_1.config.storage.sessionsDir, { recursive: true, force: true });
+                fs_1.default.mkdirSync(index_js_1.config.storage.sessionsDir, { recursive: true });
+            }
+        }
+        catch (e) {
+            console.error('Failed to clean sessions directory:', e);
+        }
+    }
+    async sendTextMessage(toPhone, text) {
+        if (!this.socket || this.status !== 'connected') {
+            return { success: false, messageId: '', error: 'WhatsApp tidak terhubung' };
+        }
+        const jid = (0, normalizer_js_1.formatToWhatsAppJid)(toPhone);
+        if (!jid) {
+            return { success: false, messageId: '', error: 'Format nomor telepon tidak valid' };
+        }
+        try {
+            const sent = await this.socket.sendMessage(jid, { text });
+            return {
+                success: true,
+                messageId: sent?.key?.id || `msg_${Date.now()}`,
+                timestamp: Date.now()
+            };
+        }
+        catch (err) {
+            return {
+                success: false,
+                messageId: '',
+                error: err.message || 'Gagal mengirim pesan WhatsApp'
+            };
+        }
+    }
+    async sendImageMessage(toPhone, imagePath, caption) {
+        if (!this.socket || this.status !== 'connected') {
+            return { success: false, messageId: '', error: 'WhatsApp tidak terhubung' };
+        }
+        const jid = (0, normalizer_js_1.formatToWhatsAppJid)(toPhone);
+        if (!jid) {
+            return { success: false, messageId: '', error: 'Format nomor telepon tidak valid' };
+        }
+        if (!fs_1.default.existsSync(imagePath)) {
+            return { success: false, messageId: '', error: 'File gambar tidak ditemukan di server' };
+        }
+        try {
+            const buffer = fs_1.default.readFileSync(imagePath);
+            const sent = await this.socket.sendMessage(jid, {
+                image: buffer,
+                caption: caption || undefined
+            });
+            return {
+                success: true,
+                messageId: sent?.key?.id || `msg_${Date.now()}`,
+                timestamp: Date.now()
+            };
+        }
+        catch (err) {
+            return {
+                success: false,
+                messageId: '',
+                error: err.message || 'Gagal mengirim gambar WhatsApp'
+            };
+        }
+    }
+}
+exports.BaileysAdapter = BaileysAdapter;

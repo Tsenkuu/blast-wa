@@ -1,0 +1,13 @@
+{
+  "name": "wa-blast-manager-pro",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WA Blast Manager Pro - Production-grade WhatsApp Automation & Broadcast Dashboard",
+  "scripts": {
+    "install:all": "npm --prefix backend install && npm --prefix frontend install",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build": "npm --prefix backend run build && npm --prefix frontend run build",
+    "test:backend": "npm --prefix backend test"
+  }
+}
