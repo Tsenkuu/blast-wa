@@ -204,6 +204,7 @@ class DatabaseManager {
         template_id INTEGER,
         custom_message TEXT NOT NULL,
         media_id INTEGER,
+        delay_seconds INTEGER DEFAULT 4,
         status TEXT DEFAULT 'draft',
         total_recipients INTEGER DEFAULT 0,
         sent_count INTEGER DEFAULT 0,
@@ -287,6 +288,13 @@ class DatabaseManager {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
     `);
+        // Auto-migrate delay_seconds if not exists
+        try {
+            this.sqliteDb.exec('ALTER TABLE broadcasts ADD COLUMN delay_seconds INTEGER DEFAULT 4;');
+        }
+        catch (e) {
+            // Column already exists
+        }
     }
     async query(sql, params = []) {
         if (!this.initialized)

@@ -42,11 +42,12 @@ router.get('/:id', async (req, res) => {
 });
 // POST /api/broadcasts (create and queue)
 router.post('/', async (req, res) => {
-    const { name, datasetId, templateId, customMessage, mediaId, scheduledAt } = req.body;
+    const { name, datasetId, templateId, customMessage, mediaId, scheduledAt, delaySeconds } = req.body;
     if (!name || !datasetId || !customMessage) {
         res.status(400).json({ success: false, message: 'Nama, Dataset, dan Isi Pesan wajib diisi.' });
         return;
     }
+    const safeDelay = Math.max(1, Math.min(120, parseInt(delaySeconds || '4', 10)));
     try {
         const dataset = await index_js_1.db.getOne('SELECT id, name FROM contact_datasets WHERE id = ?', [datasetId]);
         if (!dataset) {
@@ -56,14 +57,15 @@ router.post('/', async (req, res) => {
         const broadcastCode = `BC-${Date.now().toString(36).toUpperCase()}`;
         const initialStatus = scheduledAt ? 'queued' : 'running';
         // 1. Insert into broadcasts table
-        const bRes = await index_js_1.db.execute(`INSERT INTO broadcasts (broadcast_code, name, dataset_id, template_id, custom_message, media_id, status, scheduled_at, started_at, created_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'running' THEN CURRENT_TIMESTAMP ELSE NULL END, ?)`, [
+        const bRes = await index_js_1.db.execute(`INSERT INTO broadcasts (broadcast_code, name, dataset_id, template_id, custom_message, media_id, delay_seconds, status, scheduled_at, started_at, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'running' THEN CURRENT_TIMESTAMP ELSE NULL END, ?)`, [
             broadcastCode,
             name,
             datasetId,
             templateId || null,
             customMessage,
             mediaId || null,
+            safeDelay,
             initialStatus,
             scheduledAt || null,
             initialStatus,

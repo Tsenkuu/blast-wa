@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS broadcasts (
   template_id INT NULL,
   custom_message MEDIUMTEXT NOT NULL,
   media_id INT NULL,
+  delay_seconds INT DEFAULT 4,
   status ENUM('draft', 'queued', 'running', 'paused', 'completed', 'cancelled', 'failed') DEFAULT 'draft',
   total_recipients INT DEFAULT 0,
   sent_count INT DEFAULT 0,

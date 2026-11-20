@@ -269,11 +269,11 @@ export const ExcelManager: React.FC = () => {
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase mb-1.5">
-              Pilih File Excel (.xlsx / .xls)
+              Pilih File Excel / CSV (.xlsx / .xls / .csv)
             </label>
             <input
               type="file"
-              accept=".xlsx,.xls"
+              accept=".xlsx,.xls,.csv,text/csv"
               onChange={handleFileChange}
               className="w-full text-xs text-slate-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-brand-50 file:text-brand-700 hover:file:bg-brand-100 dark:file:bg-brand-950/50 dark:file:text-brand-400 cursor-pointer"
             />

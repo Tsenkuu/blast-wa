@@ -36,6 +36,7 @@ export interface Broadcast {
   custom_message: string;
   media_id?: number;
   media_filename?: string;
+  delay_seconds?: number;
   status: 'draft' | 'queued' | 'running' | 'paused' | 'completed' | 'cancelled' | 'failed';
   total_recipients: number;
   sent_count: number;

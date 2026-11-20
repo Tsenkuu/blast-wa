@@ -31,12 +31,16 @@ export const uploadExcel = multer({
     if (
       ext === '.xlsx' ||
       ext === '.xls' ||
+      ext === '.csv' ||
       mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
-      mime === 'application/vnd.ms-excel'
+      mime === 'application/vnd.ms-excel' ||
+      mime === 'text/csv' ||
+      mime === 'application/csv' ||
+      mime === 'text/plain'
     ) {
       cb(null, true);
     } else {
-      cb(new Error('Format file tidak didukung. Harap upload file .xlsx atau .xls'));
+      cb(new Error('Format file tidak didukung. Harap upload file .xlsx, .xls, atau .csv'));
     }
   }
 });

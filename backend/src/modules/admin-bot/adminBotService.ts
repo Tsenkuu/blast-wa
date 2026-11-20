@@ -100,8 +100,10 @@ export class WhatsAppAdminController {
       const isExcel =
         msg.fileName?.endsWith('.xlsx') ||
         msg.fileName?.endsWith('.xls') ||
+        msg.fileName?.endsWith('.csv') ||
         msg.mimetype?.includes('spreadsheet') ||
-        msg.mimetype?.includes('excel');
+        msg.mimetype?.includes('excel') ||
+        msg.mimetype?.includes('csv');
 
       if (isExcel) {
         await this.handleExcelUploadFromChat(senderPhone, msg, admin);
@@ -684,8 +686,8 @@ export class WhatsAppAdminController {
       // 2. Insert into broadcasts table
       const broadcastCode = `BC-${Date.now().toString(36).toUpperCase()}`;
       const blastRes = await db.execute(
-        `INSERT INTO broadcasts (broadcast_code, name, dataset_id, custom_message, media_id, status, created_by_admin_id)
-         VALUES (?, ?, ?, ?, ?, 'running', ?)`,
+        `INSERT INTO broadcasts (broadcast_code, name, dataset_id, custom_message, media_id, delay_seconds, status, created_by_admin_id)
+         VALUES (?, ?, ?, ?, ?, 4, 'running', ?)`,
         [
           broadcastCode,
           `Broadcast WA ${pending.datasetName}`,

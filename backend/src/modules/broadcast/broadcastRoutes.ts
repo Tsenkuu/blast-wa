@@ -52,12 +52,14 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 
 // POST /api/broadcasts (create and queue)
 router.post('/', async (req: Request, res: Response): Promise<void> => {
-  const { name, datasetId, templateId, customMessage, mediaId, scheduledAt } = req.body;
+  const { name, datasetId, templateId, customMessage, mediaId, scheduledAt, delaySeconds } = req.body;
 
   if (!name || !datasetId || !customMessage) {
     res.status(400).json({ success: false, message: 'Nama, Dataset, dan Isi Pesan wajib diisi.' });
     return;
   }
+
+  const safeDelay = Math.max(1, Math.min(120, parseInt(delaySeconds || '4', 10)));
 
   try {
     const dataset = await db.getOne<{ id: number; name: string }>(
@@ -75,8 +77,8 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 
     // 1. Insert into broadcasts table
     const bRes = await db.execute(
-      `INSERT INTO broadcasts (broadcast_code, name, dataset_id, template_id, custom_message, media_id, status, scheduled_at, started_at, created_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'running' THEN CURRENT_TIMESTAMP ELSE NULL END, ?)`,
+      `INSERT INTO broadcasts (broadcast_code, name, dataset_id, template_id, custom_message, media_id, delay_seconds, status, scheduled_at, started_at, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'running' THEN CURRENT_TIMESTAMP ELSE NULL END, ?)`,
       [
         broadcastCode,
         name,
@@ -84,6 +86,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
         templateId || null,
         customMessage,
         mediaId || null,
+        safeDelay,
         initialStatus,
         scheduledAt || null,
         initialStatus,

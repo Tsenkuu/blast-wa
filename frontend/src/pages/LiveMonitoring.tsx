@@ -151,8 +151,9 @@ export const LiveMonitoring: React.FC<LiveMonitoringProps> = ({ broadcastId, onB
   const processed = (broadcast.sent_count || 0) + (broadcast.failed_count || 0) + (broadcast.skipped_count || 0);
   const percent = broadcast.total_recipients > 0 ? Math.round((processed / broadcast.total_recipients) * 100) : 0;
 
-  // Approximate ETA: based on ~4 seconds average per pending message
-  const remainingSeconds = (broadcast.pending_count || 0) * 4.5;
+  // Approximate ETA based on configured delay_seconds
+  const delayPerMsg = broadcast.delay_seconds || 4;
+  const remainingSeconds = (broadcast.pending_count || 0) * delayPerMsg;
   const etaMinutes = Math.ceil(remainingSeconds / 60);
 
   return (
@@ -186,7 +187,7 @@ export const LiveMonitoring: React.FC<LiveMonitoringProps> = ({ broadcastId, onB
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">
-                Kode: <span className="font-mono">{broadcast.broadcast_code}</span> | Dataset: {broadcast.dataset_name || 'Excel'}
+                Kode: <span className="font-mono">{broadcast.broadcast_code}</span> | Dataset: {broadcast.dataset_name || 'Excel'} | Jeda: <span className="font-bold text-brand-600 dark:text-brand-400">{delayPerMsg} detik/pesan</span>
               </p>
             </div>
           </div>

@@ -89,6 +89,7 @@ class BroadcastQueueWorker {
       dataset_id: number;
       custom_message: string;
       media_id: number | null;
+      delay_seconds?: number;
       failed_count: number;
       sent_count: number;
       total_recipients: number;
@@ -302,9 +303,14 @@ class BroadcastQueueWorker {
       await this.syncBroadcastCounters(activeBroadcast.id);
       this.emitProgress(activeBroadcast.id);
 
-      // Randomized anti-ban rate limiting delay
-      const delay = this.getRandomDelay(config.queue.minDelayMs, config.queue.maxDelayMs);
-      await this.sleep(delay);
+      // Delay rate limiting per message (custom per broadcast or default anti-ban)
+      let delay = this.getRandomDelay(config.queue.minDelayMs, config.queue.maxDelayMs);
+      if (activeBroadcast.delay_seconds !== undefined && activeBroadcast.delay_seconds !== null && activeBroadcast.delay_seconds > 0) {
+        delay = config.queue.minDelayMs === 0 ? 0 : activeBroadcast.delay_seconds * 1000;
+      }
+      if (delay > 0) {
+        await this.sleep(delay);
+      }
 
     } catch (err: any) {
       console.error(`Error processing recipient #${recipient.id}:`, err);
