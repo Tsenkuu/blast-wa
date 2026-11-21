@@ -3,6 +3,7 @@ import makeWASocket, {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   downloadMediaMessage,
+  Browsers,
   proto,
   WASocket
 } from '@whiskeysockets/baileys';
@@ -87,6 +88,32 @@ export class BaileysAdapter implements IWhatsAppAdapter {
     }
   }
 
+  public forceClearSessionsDir(): void {
+    try {
+      if (fs.existsSync(config.storage.sessionsDir)) {
+        const files = fs.readdirSync(config.storage.sessionsDir);
+        for (const file of files) {
+          const filePath = path.join(config.storage.sessionsDir, file);
+          try {
+            if (fs.lstatSync(filePath).isDirectory()) {
+              fs.rmSync(filePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+            } else {
+              try { fs.writeFileSync(filePath, ''); } catch (_) {}
+              fs.unlinkSync(filePath);
+            }
+          } catch (e) {
+            console.warn(`[Baileys] Gagal menghapus berkas sesi ${file}:`, e);
+          }
+        }
+      } else {
+        fs.mkdirSync(config.storage.sessionsDir, { recursive: true });
+      }
+      console.log('[Baileys] Berkas sesi berhasil dibersihkan total.');
+    } catch (err) {
+      console.error('[Baileys] Error membersihkan folder sesi:', err);
+    }
+  }
+
   public async connect(): Promise<void> {
     this.isExplicitDisconnect = false;
 
@@ -101,19 +128,31 @@ export class BaileysAdapter implements IWhatsAppAdapter {
         fs.mkdirSync(config.storage.sessionsDir, { recursive: true });
       }
 
+      // Check if creds.json exists and is corrupted or empty
+      const credsPath = path.join(config.storage.sessionsDir, 'creds.json');
+      if (fs.existsSync(credsPath)) {
+        try {
+          const raw = fs.readFileSync(credsPath, 'utf8');
+          if (!raw || raw.trim() === '' || raw.trim() === '{}') {
+            fs.unlinkSync(credsPath);
+          }
+        } catch (_) {
+          try { fs.unlinkSync(credsPath); } catch (__) {}
+        }
+      }
+
       let authState;
       try {
         authState = await useMultiFileAuthState(config.storage.sessionsDir);
       } catch (authErr) {
         console.warn('[Baileys] Sesi auth rusak/tidak valid. Mengosongkan folder sesi untuk pairing baru...', authErr);
-        fs.rmSync(config.storage.sessionsDir, { recursive: true, force: true });
-        fs.mkdirSync(config.storage.sessionsDir, { recursive: true });
+        this.forceClearSessionsDir();
         authState = await useMultiFileAuthState(config.storage.sessionsDir);
       }
 
       const { state, saveCreds } = authState;
 
-      let version = [2, 3000, 1015901307] as any;
+      let version = [2, 3000, 1043857760] as any;
       try {
         const fetched = await fetchLatestBaileysVersion();
         if (fetched?.version) {
@@ -133,7 +172,7 @@ export class BaileysAdapter implements IWhatsAppAdapter {
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
         keepAliveIntervalMs: 25000,
-        browser: ['WA Blast Manager Pro', 'Chrome', '124.0.0']
+        browser: Browsers.ubuntu('Chrome')
       });
 
       this.socket.ev.on('creds.update', saveCreds);
@@ -145,6 +184,7 @@ export class BaileysAdapter implements IWhatsAppAdapter {
           try {
             this.qrCode = await QRCode.toDataURL(qr);
             this.status = 'connecting';
+            console.log('[Baileys] QR code baru berhasil di-generate.');
             this.notifyConnectionChange();
           } catch (err) {
             console.error('Error generating QR code data URL:', err);
@@ -156,23 +196,24 @@ export class BaileysAdapter implements IWhatsAppAdapter {
           const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
           console.log(`[Baileys] Koneksi terputus dengan statusCode: ${statusCode}`);
 
-          if (statusCode === DisconnectReason.loggedOut) {
-            console.log('[Baileys] Sesi telah di-logout dari WhatsApp ponsel.');
-            this.status = 'logged_out';
+          if (statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 403) {
+            console.log('[Baileys] Sesi telah logout / ditolak WhatsApp (401/403). Membersihkan kredensial lama...');
+            await this.cleanupSocket();
+            this.forceClearSessionsDir();
+
+            this.status = 'connecting';
             this.jid = null;
             this.phone = null;
             this.pushName = null;
             this.notifyConnectionChange();
 
-            // Clear session files on logout
-            try {
-              if (fs.existsSync(config.storage.sessionsDir)) {
-                fs.rmSync(config.storage.sessionsDir, { recursive: true, force: true });
-                fs.mkdirSync(config.storage.sessionsDir, { recursive: true });
-              }
-            } catch (e) {
-              console.error('Failed to clear sessions dir:', e);
-            }
+            // Auto-trigger fresh connect agar QR code baru langsung muncul di layar user tanpa stuck di logged_out
+            console.log('[Baileys] Menyiapkan inisialisasi sesi bersih untuk generate QR code...');
+            if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+            this.reconnectTimeout = setTimeout(() => {
+              this.connect().catch((e) => console.error('[Baileys] Fresh pairing connect failed:', e));
+            }, 1000);
+            return;
           } else if (statusCode === DisconnectReason.restartRequired) {
             // Error code 515: Baileys handshake required restart. Immediate reconnection without resetting auth!
             console.log('[Baileys] Status 515 (Restart Required). Mengkoneksi ulang secara otomatis...');
@@ -346,16 +387,7 @@ export class BaileysAdapter implements IWhatsAppAdapter {
     this.phone = null;
     this.pushName = null;
 
-    try {
-      if (fs.existsSync(config.storage.sessionsDir)) {
-        fs.rmSync(config.storage.sessionsDir, { recursive: true, force: true });
-      }
-      fs.mkdirSync(config.storage.sessionsDir, { recursive: true });
-      console.log('[Baileys] Folder sesi berhasil dibersihkan total.');
-    } catch (e) {
-      console.error('Failed to wipe sessions directory on resetSession:', e);
-    }
-
+    this.forceClearSessionsDir();
     this.notifyConnectionChange();
   }
 

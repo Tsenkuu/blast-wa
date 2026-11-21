@@ -103,11 +103,13 @@ class WhatsAppService {
     if (info.status === 'connected') {
       await logSystem('SUCCESS', 'WHATSAPP', `WhatsApp Terhubung: ${info.phone} (${info.name})`);
       this.notifyAdmins(`🟢 *NOTIFIKASI SISTEM*\n\nWhatsApp Bot berhasil TERHUBUNG!\nNomor: ${info.phone}\nNama: ${info.name}\nWaktu: ${new Date().toLocaleString('id-ID')}`);
+    } else if (info.status === 'connecting' && info.qrCode) {
+      await logSystem('INFO', 'WHATSAPP', 'QR Code baru siap dipindai melalui WhatsApp di ponsel Anda.');
     } else if (info.status === 'disconnected') {
       await logSystem('WARNING', 'WHATSAPP', 'WhatsApp Terputus sementara.');
     } else if (info.status === 'logged_out') {
-      await logSystem('ERROR', 'WHATSAPP', 'Sesi WhatsApp telah Logout. Silakan scan ulang QR.');
-      this.notifyAdmins(`🔴 *NOTIFIKASI SISTEM*\n\nSesi WhatsApp telah KELUAR / LOGOUT.\nSilakan buka dashboard website dan scan ulang QR code.`);
+      await logSystem('WARNING', 'WHATSAPP', 'Sesi WhatsApp telah logout. Menyiapkan QR Code baru...');
+      this.notifyAdmins(`🔴 *NOTIFIKASI SISTEM*\n\nSesi WhatsApp telah KELUAR / LOGOUT.\nSilakan buka dashboard website dan scan ulang QR code baru.`);
     }
   }
 

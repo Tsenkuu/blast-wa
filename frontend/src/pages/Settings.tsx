@@ -184,10 +184,54 @@ export const Settings: React.FC = () => {
           </div>
         )}
 
+        {/* Quick Presets for Jeda Antar Pesan */}
+        <div className="p-4 rounded-xl bg-slate-50 dark:bg-navy-950 border border-slate-200/80 dark:border-slate-800 space-y-2">
+          <label className="block font-bold text-slate-700 dark:text-slate-300 text-xs uppercase">
+            Pilihan Cepat Jeda Antar Nomor (Preset)
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { label: '3 Detik', ms: 3000 },
+              { label: '5 Detik', ms: 5000 },
+              { label: '10 Detik', ms: 10000 },
+              { label: '30 Detik', ms: 30000 },
+              { label: '1 Menit (Aman)', ms: 60000 },
+              { label: '2 Menit', ms: 120000 }
+            ].map((p) => {
+              const currentMin = parseInt(settings.min_delay_ms || '0', 10);
+              const normalized = currentMin <= 300 ? currentMin * 1000 : currentMin;
+              const isActive = normalized === p.ms;
+              return (
+                <button
+                  key={p.ms}
+                  type="button"
+                  onClick={() => {
+                    setSettings((prev) => ({
+                      ...prev,
+                      min_delay_ms: String(p.ms),
+                      max_delay_ms: String(Math.round(p.ms * 1.2))
+                    }));
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                    isActive
+                      ? 'bg-brand-600 text-white shadow-sm ring-2 ring-brand-400'
+                      : 'bg-white dark:bg-navy-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+          </div>
+          <span className="text-[11px] text-slate-500 dark:text-slate-400 block">
+            Jeda yang Anda pilih di sini akan diterapkan secara otomatis ke seluruh proses pengiriman antrean broadcast.
+          </span>
+        </div>
+
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
           <div>
             <label className="block font-bold text-slate-700 dark:text-slate-300 uppercase mb-1">
-              Jeda Minimal Antar Pesan (Milidetik)
+              Jeda Minimal Antar Pesan (Milidetik atau Detik)
             </label>
             <input
               type="number"
@@ -195,12 +239,23 @@ export const Settings: React.FC = () => {
               onChange={(e) => setSettings({ ...settings, min_delay_ms: e.target.value })}
               className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-navy-950 text-slate-900 dark:text-white font-medium"
             />
-            <span className="text-[10px] text-slate-400 mt-0.5 block">Contoh: 3000 ms = 3 detik</span>
+            <span className="text-[11px] text-brand-600 dark:text-brand-400 font-semibold mt-1 block">
+              Setara dengan:{' '}
+              {(() => {
+                const val = parseInt(settings.min_delay_ms || '0', 10);
+                if (!val) return '0 detik';
+                const ms = val <= 300 ? val * 1000 : val;
+                const sec = Math.round(ms / 1000);
+                return sec >= 60
+                  ? `${sec} detik (${(sec / 60).toFixed(1).replace('.0', '')} menit)`
+                  : `${sec} detik`;
+              })()}
+            </span>
           </div>
 
           <div>
             <label className="block font-bold text-slate-700 dark:text-slate-300 uppercase mb-1">
-              Jeda Maksimal Antar Pesan (Milidetik)
+              Jeda Maksimal Antar Pesan (Milidetik atau Detik)
             </label>
             <input
               type="number"
@@ -208,7 +263,18 @@ export const Settings: React.FC = () => {
               onChange={(e) => setSettings({ ...settings, max_delay_ms: e.target.value })}
               className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-navy-950 text-slate-900 dark:text-white font-medium"
             />
-            <span className="text-[10px] text-slate-400 mt-0.5 block">Jeda akan diacak antara min dan max</span>
+            <span className="text-[11px] text-brand-600 dark:text-brand-400 font-semibold mt-1 block">
+              Setara dengan:{' '}
+              {(() => {
+                const val = parseInt(settings.max_delay_ms || '0', 10);
+                if (!val) return '0 detik';
+                const ms = val <= 300 ? val * 1000 : val;
+                const sec = Math.round(ms / 1000);
+                return sec >= 60
+                  ? `${sec} detik (${(sec / 60).toFixed(1).replace('.0', '')} menit)`
+                  : `${sec} detik`;
+              })()}
+            </span>
           </div>
 
           <div>

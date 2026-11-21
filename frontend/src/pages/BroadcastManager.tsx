@@ -48,15 +48,25 @@ export const BroadcastManager: React.FC<BroadcastManagerProps> = ({ onBroadcastC
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [dsRes, tplRes, medRes] = await Promise.all([
+        const [dsRes, tplRes, medRes, setRes] = await Promise.all([
           api.get('/excel/datasets'),
           api.get('/templates'),
-          api.get('/media')
+          api.get('/media'),
+          api.get('/settings')
         ]);
 
         if (dsRes.data?.success) setDatasets(dsRes.data.data);
         if (tplRes.data?.success) setTemplates(tplRes.data.data);
         if (medRes.data?.success) setMediaList(medRes.data.data);
+
+        // Pre-fill delay from global settings
+        if (setRes.data?.success && setRes.data.data?.mapped?.min_delay_ms) {
+          const raw = parseInt(setRes.data.data.mapped.min_delay_ms, 10);
+          if (raw > 0) {
+            const sec = raw <= 300 ? raw : Math.round(raw / 1000);
+            setDelaySeconds(Math.max(1, Math.min(600, sec)));
+          }
+        }
 
         // Pre-select first dataset if available
         if (dsRes.data?.data?.length > 0) {
@@ -422,33 +432,42 @@ export const BroadcastManager: React.FC<BroadcastManagerProps> = ({ onBroadcastC
                   <input
                     type="number"
                     min={1}
-                    max={120}
+                    max={600}
                     value={delaySeconds}
-                    onChange={(e) => setDelaySeconds(Math.max(1, parseInt(e.target.value || '1', 10)))}
+                    onChange={(e) => setDelaySeconds(Math.max(1, Math.min(600, parseInt(e.target.value || '1', 10))))}
                     className="w-24 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-navy-950 text-slate-900 dark:text-white text-xs font-bold focus:outline-none focus:ring-2 focus:ring-brand-500 text-center"
                   />
-                  <span className="text-xs text-slate-600 dark:text-slate-300 font-semibold">detik</span>
+                  <span className="text-xs text-slate-600 dark:text-slate-300 font-semibold">
+                    detik {delaySeconds >= 60 ? `(${(delaySeconds / 60).toFixed(1).replace('.0', '')} menit)` : ''}
+                  </span>
                 </div>
                 {/* Presets */}
-                <div className="flex items-center space-x-1.5">
-                  {[3, 4, 5, 8, 10, 15].map((s) => (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {[
+                    { s: 5, label: '5s' },
+                    { s: 10, label: '10s' },
+                    { s: 15, label: '15s' },
+                    { s: 30, label: '30s' },
+                    { s: 60, label: '1 Menit (60s)' },
+                    { s: 120, label: '2 Menit (120s)' }
+                  ].map((p) => (
                     <button
-                      key={s}
+                      key={p.s}
                       type="button"
-                      onClick={() => setDelaySeconds(s)}
+                      onClick={() => setDelaySeconds(p.s)}
                       className={`px-2.5 py-1 rounded-lg text-xs font-bold transition ${
-                        delaySeconds === s
-                          ? 'bg-brand-600 text-white shadow-sm'
+                        delaySeconds === p.s
+                          ? 'bg-brand-600 text-white shadow-sm ring-1 ring-brand-400'
                           : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
                       }`}
                     >
-                      {s}s
+                      {p.label}
                     </button>
                   ))}
                 </div>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5">
-                Memberikan jeda waktu {delaySeconds} detik setelah setiap nomor selesai dikirim agar aktivitas tampak alami seperti pengguna manusia.
+                Memberikan jeda waktu {delaySeconds} detik ({delaySeconds >= 60 ? `${(delaySeconds / 60).toFixed(1).replace('.0', '')} menit` : `${delaySeconds} detik`}) setelah setiap nomor selesai dikirim agar aktivitas tampak alami dan aman dari blokir WhatsApp.
               </p>
             </div>
 

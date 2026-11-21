@@ -49,6 +49,19 @@ export const WhatsAppConnection: React.FC = () => {
   const statusState = waStatus.qrCode ? 'connecting' : (currentStatus.status || 'disconnected');
   const qrImage = waStatus.qrCode || currentStatus.qrCode;
 
+  // Poll status while connecting if QR image is not yet rendered
+  useEffect(() => {
+    let timer: any = null;
+    if (statusState === 'connecting' && !qrImage) {
+      timer = setInterval(() => {
+        fetchStatus();
+      }, 2000);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [statusState, qrImage]);
+
   const handleConnect = async () => {
     setLoadingAction('connect');
     setMessage(null);

@@ -195,12 +195,46 @@ class BroadcastQueueWorker {
             }
             await this.syncBroadcastCounters(activeBroadcast.id);
             this.emitProgress(activeBroadcast.id);
-            // Delay rate limiting per message (custom per broadcast or default anti-ban)
-            let delay = this.getRandomDelay(index_js_2.config.queue.minDelayMs, index_js_2.config.queue.maxDelayMs);
+            // Delay rate limiting per message (anti-ban delay from Settings or Broadcast custom delay)
+            let globalMinMs = index_js_2.config.queue.minDelayMs;
+            let globalMaxMs = index_js_2.config.queue.maxDelayMs;
+            try {
+                const minRow = await index_js_1.db.getOne(`SELECT value_text FROM app_settings WHERE key_name = 'min_delay_ms'`);
+                const maxRow = await index_js_1.db.getOne(`SELECT value_text FROM app_settings WHERE key_name = 'max_delay_ms'`);
+                if (minRow && minRow.value_text) {
+                    const parsed = parseInt(minRow.value_text, 10);
+                    if (!isNaN(parsed) && parsed > 0) {
+                        // Auto-detect: jika user input <= 300, itu adalah detik (contoh: 60 = 60 detik). Jika > 300, sudah ms (contoh: 60000 = 60 detik).
+                        globalMinMs = parsed <= 300 ? parsed * 1000 : parsed;
+                    }
+                }
+                if (maxRow && maxRow.value_text) {
+                    const parsed = parseInt(maxRow.value_text, 10);
+                    if (!isNaN(parsed) && parsed > 0) {
+                        globalMaxMs = parsed <= 300 ? parsed * 1000 : parsed;
+                    }
+                }
+            }
+            catch (e) {
+                // Fallback to config
+            }
+            if (globalMaxMs < globalMinMs) {
+                globalMaxMs = globalMinMs;
+            }
+            let delay = this.getRandomDelay(globalMinMs, globalMaxMs);
+            // If active broadcast has its own delay_seconds
             if (activeBroadcast.delay_seconds !== undefined && activeBroadcast.delay_seconds !== null && activeBroadcast.delay_seconds > 0) {
-                delay = index_js_2.config.queue.minDelayMs === 0 ? 0 : activeBroadcast.delay_seconds * 1000;
+                const bcastDelayMs = activeBroadcast.delay_seconds * 1000;
+                // Prioritaskan nilai jeda yang lebih besar antara setting broadcast dan setting global
+                delay = Math.max(bcastDelayMs, globalMinMs);
+            }
+            // If test mode with minDelayMs === 0, keep it 0
+            if (index_js_2.config.queue.minDelayMs === 0) {
+                delay = 0;
             }
             if (delay > 0) {
+                const delaySec = Math.round(delay / 1000);
+                await (0, logger_js_1.logSystem)('INFO', 'BLAST', `Menunggu jeda ${delaySec} detik sebelum pengiriman ke nomor berikutnya...`);
                 await this.sleep(delay);
             }
         }

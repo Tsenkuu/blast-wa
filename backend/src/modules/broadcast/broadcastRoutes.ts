@@ -59,7 +59,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  const safeDelay = Math.max(1, Math.min(120, parseInt(delaySeconds || '4', 10)));
+  const safeDelay = Math.max(1, Math.min(600, parseInt(delaySeconds || '4', 10)));
 
   try {
     const dataset = await db.getOne<{ id: number; name: string }>(

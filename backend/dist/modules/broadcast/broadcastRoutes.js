@@ -47,7 +47,7 @@ router.post('/', async (req, res) => {
         res.status(400).json({ success: false, message: 'Nama, Dataset, dan Isi Pesan wajib diisi.' });
         return;
     }
-    const safeDelay = Math.max(1, Math.min(120, parseInt(delaySeconds || '4', 10)));
+    const safeDelay = Math.max(1, Math.min(600, parseInt(delaySeconds || '4', 10)));
     try {
         const dataset = await index_js_1.db.getOne('SELECT id, name FROM contact_datasets WHERE id = ?', [datasetId]);
         if (!dataset) {
