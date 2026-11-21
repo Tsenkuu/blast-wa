@@ -144,6 +144,44 @@ class WhatsAppService {
     await this.adapter.logout();
   }
 
+  public async resetSession(): Promise<void> {
+    await logSystem('WARNING', 'WHATSAPP', 'Mereset sesi WhatsApp & membersihkan berkas autentikasi...');
+    await this.adapter.resetSession();
+
+    try {
+      await db.execute(
+        `UPDATE whatsapp_sessions SET 
+           phone_number = NULL, 
+           push_name = NULL, 
+           status = 'disconnected', 
+           qr_code = NULL, 
+           is_active = 0,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE session_name = ?`,
+        ['default']
+      );
+    } catch (err) {
+      console.error('Failed to reset session in DB:', err);
+    }
+
+    const io = getSocketIO();
+    if (io) {
+      io.emit('wa:status', {
+        status: 'disconnected',
+        phone: null,
+        name: null,
+        qrCode: null
+      });
+    }
+
+    await logSystem('SUCCESS', 'WHATSAPP', 'Sesi WhatsApp berhasil direset total.');
+  }
+
+  public async reconnect(): Promise<void> {
+    await logSystem('INFO', 'WHATSAPP', 'Memulai koneksi ulang WhatsApp...');
+    await this.adapter.reconnect();
+  }
+
   public getAccountInfo(): WhatsAppAccountInfo {
     return this.adapter.getAccountInfo();
   }

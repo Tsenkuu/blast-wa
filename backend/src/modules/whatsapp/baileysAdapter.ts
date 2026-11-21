@@ -32,9 +32,9 @@ export class BaileysAdapter implements IWhatsAppAdapter {
   private reconnectAttempts = 0;
   private maxAutoReconnectAttempts = 5;
   private isExplicitDisconnect = false;
+  private reconnectTimeout: NodeJS.Timeout | null = null;
 
   public async init(): Promise<void> {
-    // Session directory
     if (!fs.existsSync(config.storage.sessionsDir)) {
       fs.mkdirSync(config.storage.sessionsDir, { recursive: true });
     }
@@ -69,14 +69,59 @@ export class BaileysAdapter implements IWhatsAppAdapter {
     }
   }
 
+  private async cleanupSocket(): Promise<void> {
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    if (this.socket) {
+      try {
+        this.socket.ev.removeAllListeners('connection.update');
+        this.socket.ev.removeAllListeners('creds.update');
+        this.socket.ev.removeAllListeners('messages.upsert');
+        this.socket.end(undefined);
+      } catch (e) {
+        // Safe ignore
+      }
+      this.socket = null;
+    }
+  }
+
   public async connect(): Promise<void> {
     this.isExplicitDisconnect = false;
+
+    // Clean up any stale socket instance before creating a new one
+    await this.cleanupSocket();
+
     this.status = 'connecting';
     this.notifyConnectionChange();
 
     try {
-      const { state, saveCreds } = await useMultiFileAuthState(config.storage.sessionsDir);
-      const { version } = await fetchLatestBaileysVersion();
+      if (!fs.existsSync(config.storage.sessionsDir)) {
+        fs.mkdirSync(config.storage.sessionsDir, { recursive: true });
+      }
+
+      let authState;
+      try {
+        authState = await useMultiFileAuthState(config.storage.sessionsDir);
+      } catch (authErr) {
+        console.warn('[Baileys] Sesi auth rusak/tidak valid. Mengosongkan folder sesi untuk pairing baru...', authErr);
+        fs.rmSync(config.storage.sessionsDir, { recursive: true, force: true });
+        fs.mkdirSync(config.storage.sessionsDir, { recursive: true });
+        authState = await useMultiFileAuthState(config.storage.sessionsDir);
+      }
+
+      const { state, saveCreds } = authState;
+
+      let version = [2, 3000, 1015901307] as any;
+      try {
+        const fetched = await fetchLatestBaileysVersion();
+        if (fetched?.version) {
+          version = fetched.version;
+        }
+      } catch (e) {
+        console.warn('[Baileys] Gagal mengambil versi terbaru Baileys, menggunakan versi fallback stabil.');
+      }
 
       this.socket = makeWASocket({
         version,
@@ -84,6 +129,10 @@ export class BaileysAdapter implements IWhatsAppAdapter {
         printQRInTerminal: false,
         auth: state,
         generateHighQualityLinkPreview: false,
+        syncFullHistory: false,
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
+        keepAliveIntervalMs: 25000,
         browser: ['WA Blast Manager Pro', 'Chrome', '124.0.0']
       });
 
@@ -105,14 +154,16 @@ export class BaileysAdapter implements IWhatsAppAdapter {
         if (connection === 'close') {
           this.qrCode = null;
           const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
-          const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+          console.log(`[Baileys] Koneksi terputus dengan statusCode: ${statusCode}`);
 
-          if (isLoggedOut) {
+          if (statusCode === DisconnectReason.loggedOut) {
+            console.log('[Baileys] Sesi telah di-logout dari WhatsApp ponsel.');
             this.status = 'logged_out';
             this.jid = null;
             this.phone = null;
             this.pushName = null;
             this.notifyConnectionChange();
+
             // Clear session files on logout
             try {
               if (fs.existsSync(config.storage.sessionsDir)) {
@@ -122,6 +173,18 @@ export class BaileysAdapter implements IWhatsAppAdapter {
             } catch (e) {
               console.error('Failed to clear sessions dir:', e);
             }
+          } else if (statusCode === DisconnectReason.restartRequired) {
+            // Error code 515: Baileys handshake required restart. Immediate reconnection without resetting auth!
+            console.log('[Baileys] Status 515 (Restart Required). Mengkoneksi ulang secara otomatis...');
+            this.status = 'connecting';
+            this.notifyConnectionChange();
+            this.reconnectTimeout = setTimeout(() => {
+              this.connect().catch((err) => console.error('[Baileys] Reconnect after 515 failed:', err));
+            }, 800);
+          } else if (statusCode === DisconnectReason.connectionReplaced) {
+            console.warn('[Baileys] Sesi digantikan oleh koneksi WhatsApp Web lain (440). Hentikan auto-reconnect.');
+            this.status = 'disconnected';
+            this.notifyConnectionChange();
           } else {
             this.status = 'disconnected';
             this.notifyConnectionChange();
@@ -130,16 +193,22 @@ export class BaileysAdapter implements IWhatsAppAdapter {
             if (!this.isExplicitDisconnect && this.reconnectAttempts < this.maxAutoReconnectAttempts) {
               this.reconnectAttempts++;
               const delay = Math.min(3000 * this.reconnectAttempts, 15000);
-              console.log(`[Baileys] Disconnected temporarily. Auto-reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxAutoReconnectAttempts})...`);
-              setTimeout(() => {
+              console.log(`[Baileys] Disconnected sementara. Auto-reconnecting dalam ${delay}ms (upaya ${this.reconnectAttempts}/${this.maxAutoReconnectAttempts})...`);
+              
+              if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+              this.reconnectTimeout = setTimeout(() => {
                 if (this.status !== 'connected' && !this.isExplicitDisconnect) {
-                  this.connect();
+                  this.connect().catch((e) => console.error('[Baileys] Auto-reconnect attempt failed:', e));
                 }
               }, delay);
             }
           }
         } else if (connection === 'open') {
           this.reconnectAttempts = 0;
+          if (this.reconnectTimeout) {
+            clearTimeout(this.reconnectTimeout);
+            this.reconnectTimeout = null;
+          }
           this.status = 'connected';
           this.qrCode = null;
 
@@ -232,14 +301,7 @@ export class BaileysAdapter implements IWhatsAppAdapter {
 
   public async disconnect(): Promise<void> {
     this.isExplicitDisconnect = true;
-    if (this.socket) {
-      try {
-        this.socket.end(undefined);
-      } catch (e) {
-        console.error('Error ending socket:', e);
-      }
-      this.socket = null;
-    }
+    await this.cleanupSocket();
     this.status = 'disconnected';
     this.qrCode = null;
     this.notifyConnectionChange();
@@ -253,8 +315,9 @@ export class BaileysAdapter implements IWhatsAppAdapter {
       } catch (e) {
         console.error('Error during Baileys logout:', e);
       }
-      this.socket = null;
     }
+    await this.cleanupSocket();
+
     this.status = 'logged_out';
     this.qrCode = null;
     this.jid = null;
@@ -270,6 +333,40 @@ export class BaileysAdapter implements IWhatsAppAdapter {
     } catch (e) {
       console.error('Failed to clean sessions directory:', e);
     }
+  }
+
+  public async resetSession(): Promise<void> {
+    this.isExplicitDisconnect = true;
+    this.reconnectAttempts = 0;
+    await this.cleanupSocket();
+
+    this.status = 'disconnected';
+    this.qrCode = null;
+    this.jid = null;
+    this.phone = null;
+    this.pushName = null;
+
+    try {
+      if (fs.existsSync(config.storage.sessionsDir)) {
+        fs.rmSync(config.storage.sessionsDir, { recursive: true, force: true });
+      }
+      fs.mkdirSync(config.storage.sessionsDir, { recursive: true });
+      console.log('[Baileys] Folder sesi berhasil dibersihkan total.');
+    } catch (e) {
+      console.error('Failed to wipe sessions directory on resetSession:', e);
+    }
+
+    this.notifyConnectionChange();
+  }
+
+  public async reconnect(): Promise<void> {
+    console.log('[Baileys] Menjalankan reconnect / koneksi ulang...');
+    this.reconnectAttempts = 0;
+    this.isExplicitDisconnect = false;
+    await this.cleanupSocket();
+    // Tunggu sejenak agar socket dilepas oleh sistem operasi
+    await new Promise((res) => setTimeout(res, 500));
+    await this.connect();
   }
 
   public async sendTextMessage(toPhone: string, text: string): Promise<SendMessageResult> {

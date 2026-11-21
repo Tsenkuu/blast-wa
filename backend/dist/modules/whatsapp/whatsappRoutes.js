@@ -49,17 +49,39 @@ router.post('/logout', (0, auth_js_1.requireRole)(['Super Admin']), async (req, 
     }
 });
 // POST /api/whatsapp/restart
-router.post('/restart', (0, auth_js_1.requireRole)(['Super Admin']), async (req, res) => {
+router.post('/restart', (0, auth_js_1.requireRole)(['Super Admin', 'Operator']), async (req, res) => {
     try {
-        await baileysService_js_1.whatsappService.disconnect();
-        setTimeout(async () => {
-            await baileysService_js_1.whatsappService.connect();
-        }, 1500);
+        await baileysService_js_1.whatsappService.reconnect();
         await (0, logger_js_1.logAudit)(req.user.id, 'WA_RESTART', 'whatsapp', {}, req.ip);
         res.json({ success: true, message: 'Koneksi WhatsApp direstart.' });
     }
     catch (err) {
         res.status(500).json({ success: false, message: `Gagal restart: ${err.message}` });
+    }
+});
+// POST /api/whatsapp/reconnect
+router.post('/reconnect', (0, auth_js_1.requireRole)(['Super Admin', 'Operator']), async (req, res) => {
+    try {
+        await baileysService_js_1.whatsappService.reconnect();
+        await (0, logger_js_1.logAudit)(req.user.id, 'WA_RECONNECT', 'whatsapp', {}, req.ip);
+        res.json({ success: true, message: 'Mengkoneksi ulang WhatsApp...' });
+    }
+    catch (err) {
+        res.status(500).json({ success: false, message: `Gagal mengkoneksi ulang: ${err.message}` });
+    }
+});
+// POST /api/whatsapp/reset-session
+router.post('/reset-session', (0, auth_js_1.requireRole)(['Super Admin', 'Operator']), async (req, res) => {
+    try {
+        await baileysService_js_1.whatsappService.resetSession();
+        await (0, logger_js_1.logAudit)(req.user.id, 'WA_RESET_SESSION', 'whatsapp', {}, req.ip);
+        res.json({
+            success: true,
+            message: 'Sesi WhatsApp berhasil direset total. Berkas kredensial dihapus. Silakan hubungkan kembali untuk scan QR baru.'
+        });
+    }
+    catch (err) {
+        res.status(500).json({ success: false, message: `Gagal reset sesi: ${err.message}` });
     }
 });
 exports.default = router;

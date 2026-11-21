@@ -34,6 +34,8 @@ export interface IWhatsAppAdapter {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   logout(): Promise<void>;
+  resetSession(): Promise<void>;
+  reconnect(): Promise<void>;
   getAccountInfo(): WhatsAppAccountInfo;
   sendTextMessage(toPhone: string, text: string): Promise<SendMessageResult>;
   sendImageMessage(toPhone: string, imagePath: string, caption?: string): Promise<SendMessageResult>;

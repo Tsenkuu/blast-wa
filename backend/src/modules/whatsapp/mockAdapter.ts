@@ -71,6 +71,20 @@ export class MockWhatsAppAdapter implements IWhatsAppAdapter {
     this.notify();
   }
 
+  public async resetSession(): Promise<void> {
+    this.status = 'disconnected';
+    this.qrCode = null;
+    this.jid = null;
+    this.phone = null;
+    this.pushName = null;
+    this.notify();
+  }
+
+  public async reconnect(): Promise<void> {
+    await this.disconnect();
+    await this.connect();
+  }
+
   public async sendTextMessage(toPhone: string, text: string): Promise<SendMessageResult> {
     if (this.status !== 'connected') {
       return { success: false, messageId: '', error: 'WhatsApp mock tidak terhubung' };

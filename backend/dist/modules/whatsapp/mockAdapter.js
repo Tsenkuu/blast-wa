@@ -57,6 +57,18 @@ class MockWhatsAppAdapter {
         this.pushName = null;
         this.notify();
     }
+    async resetSession() {
+        this.status = 'disconnected';
+        this.qrCode = null;
+        this.jid = null;
+        this.phone = null;
+        this.pushName = null;
+        this.notify();
+    }
+    async reconnect() {
+        await this.disconnect();
+        await this.connect();
+    }
     async sendTextMessage(toPhone, text) {
         if (this.status !== 'connected') {
             return { success: false, messageId: '', error: 'WhatsApp mock tidak terhubung' };

@@ -51,16 +51,38 @@ router.post('/logout', requireRole(['Super Admin']), async (req: Request, res: R
 });
 
 // POST /api/whatsapp/restart
-router.post('/restart', requireRole(['Super Admin']), async (req: Request, res: Response) => {
+router.post('/restart', requireRole(['Super Admin', 'Operator']), async (req: Request, res: Response) => {
   try {
-    await whatsappService.disconnect();
-    setTimeout(async () => {
-      await whatsappService.connect();
-    }, 1500);
+    await whatsappService.reconnect();
     await logAudit(req.user!.id, 'WA_RESTART', 'whatsapp', {}, req.ip);
     res.json({ success: true, message: 'Koneksi WhatsApp direstart.' });
   } catch (err: any) {
     res.status(500).json({ success: false, message: `Gagal restart: ${err.message}` });
+  }
+});
+
+// POST /api/whatsapp/reconnect
+router.post('/reconnect', requireRole(['Super Admin', 'Operator']), async (req: Request, res: Response) => {
+  try {
+    await whatsappService.reconnect();
+    await logAudit(req.user!.id, 'WA_RECONNECT', 'whatsapp', {}, req.ip);
+    res.json({ success: true, message: 'Mengkoneksi ulang WhatsApp...' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: `Gagal mengkoneksi ulang: ${err.message}` });
+  }
+});
+
+// POST /api/whatsapp/reset-session
+router.post('/reset-session', requireRole(['Super Admin', 'Operator']), async (req: Request, res: Response) => {
+  try {
+    await whatsappService.resetSession();
+    await logAudit(req.user!.id, 'WA_RESET_SESSION', 'whatsapp', {}, req.ip);
+    res.json({
+      success: true,
+      message: 'Sesi WhatsApp berhasil direset total. Berkas kredensial dihapus. Silakan hubungkan kembali untuk scan QR baru.'
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: `Gagal reset sesi: ${err.message}` });
   }
 });
 
