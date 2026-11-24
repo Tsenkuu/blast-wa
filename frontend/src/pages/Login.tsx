@@ -1,12 +1,20 @@
-import React, { useState } from 'react';
-import { Lock, User, ArrowRight, ShieldCheck, Eye, EyeOff, Radio } from 'lucide-react';
-import { api } from '../services/api.js';
-import { useAuth } from '../context/AuthContext.js';
-import { useTheme } from '../context/ThemeContext.js';
+import React, { useState } from "react";
+import {
+  Lock,
+  User,
+  ArrowRight,
+  ShieldCheck,
+  Eye,
+  EyeOff,
+  Radio,
+} from "lucide-react";
+import { api } from "../services/api.js";
+import { useAuth } from "../context/AuthContext.js";
+import { useTheme } from "../context/ThemeContext.js";
 
 export const Login: React.FC = () => {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -16,7 +24,7 @@ export const Login: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username || !password) {
-      setError('Harap masukkan username dan password.');
+      setError("Harap masukkan username dan password.");
       return;
     }
 
@@ -24,14 +32,16 @@ export const Login: React.FC = () => {
     setLoading(true);
 
     try {
-      const res = await api.post('/auth/login', { username, password });
+      const res = await api.post("/auth/login", { username, password });
       if (res.data?.success) {
         login(res.data.token, res.data.user);
       } else {
-        setError(res.data?.message || 'Login gagal.');
+        setError(res.data?.message || "Login gagal.");
       }
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Koneksi gagal atau kredensial salah.');
+      setError(
+        err.response?.data?.message || "Koneksi gagal atau kredensial salah.",
+      );
     } finally {
       setLoading(false);
     }
@@ -56,7 +66,9 @@ export const Login: React.FC = () => {
         {/* Login Box */}
         <div className="bg-white dark:bg-navy-900 rounded-3xl p-8 shadow-xl shadow-slate-200/50 dark:shadow-none border border-slate-200/80 dark:border-slate-800 transition-colors">
           <div className="mb-6">
-            <h2 className="text-lg font-bold text-slate-900 dark:text-white">Masuk ke Dashboard</h2>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+              Masuk ke Dashboard
+            </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
               Gunakan akun Super Admin atau Operator Anda
             </p>
@@ -97,7 +109,7 @@ export const Login: React.FC = () => {
                   <Lock size={18} />
                 </div>
                 <input
-                  type={showPassword ? 'text' : 'password'}
+                  type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Masukkan password Anda"
@@ -131,9 +143,9 @@ export const Login: React.FC = () => {
 
           {/* Dev credentials helper */}
           <div className="mt-6 pt-5 border-t border-slate-100 dark:border-slate-800 text-center">
-            <p className="text-[11px] text-slate-400 dark:text-slate-500">
+            {/* <p className="text-[11px] text-slate-400 dark:text-slate-500">
               Kredensial Default: <span className="font-mono font-semibold text-slate-600 dark:text-slate-300">admin</span> / <span className="font-mono font-semibold text-slate-600 dark:text-slate-300">Admin@WA2026</span>
-            </p>
+            </p> */}
           </div>
         </div>
 
