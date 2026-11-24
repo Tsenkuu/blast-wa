@@ -84,4 +84,31 @@ router.post('/reset-session', (0, auth_js_1.requireRole)(['Super Admin', 'Operat
         res.status(500).json({ success: false, message: `Gagal reset sesi: ${err.message}` });
     }
 });
+// POST /api/whatsapp/send-direct
+router.post('/send-direct', (0, auth_js_1.requireRole)(['Super Admin', 'Operator']), async (req, res) => {
+    const { phone, message, imagePath, caption } = req.body;
+    if (!phone || (!message && !imagePath)) {
+        res.status(400).json({ success: false, message: 'Nomor telepon dan pesan wajib diisi.' });
+        return;
+    }
+    try {
+        let result;
+        if (imagePath) {
+            result = await baileysService_js_1.whatsappService.sendImageMessage(phone, imagePath, caption || message);
+        }
+        else {
+            result = await baileysService_js_1.whatsappService.sendTextMessage(phone, message);
+        }
+        if (result.success) {
+            await (0, logger_js_1.logAudit)(req.user.id, 'WA_SEND_DIRECT', 'whatsapp', { phone }, req.ip);
+            res.json({ success: true, message: `Pesan berhasil dikirim ke ${phone}`, messageId: result.messageId });
+        }
+        else {
+            res.status(500).json({ success: false, message: result.error || 'Gagal mengirim pesan WhatsApp' });
+        }
+    }
+    catch (err) {
+        res.status(500).json({ success: false, message: `Error: ${err.message}` });
+    }
+});
 exports.default = router;

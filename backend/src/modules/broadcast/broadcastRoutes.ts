@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { db } from '../../database/index.js';
 import { broadcastQueueWorker } from './broadcastQueueWorker.js';
+import { whatsappService } from '../whatsapp/baileysService.js';
 import { resolveTemplate } from '../../utils/templateEngine.js';
 import { authenticate, requireRole } from '../../middleware/auth.js';
 import { logAudit, logSystem } from '../../utils/logger.js';
@@ -133,6 +134,9 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       recipientsCount: contacts.length
     }, req.ip);
 
+    // Trigger queue processing immediately
+    broadcastQueueWorker.processNextInQueue().catch((e) => console.error('Worker trigger error:', e));
+
     res.json({
       success: true,
       message: 'Broadcast berhasil dibuat dan dimasukkan ke antrean.',
@@ -145,6 +149,34 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     });
   } catch (err: any) {
     res.status(500).json({ success: false, message: `Gagal membuat broadcast: ${err.message}` });
+  }
+});
+
+// PATCH /api/broadcasts/:id/delay (Ubah jangka waktu jeda per nomor on-the-fly)
+router.patch('/:id/delay', async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const { delaySeconds } = req.body;
+  const safeDelay = Math.max(1, Math.min(600, parseInt(String(delaySeconds || '4'), 10)));
+
+  try {
+    await db.execute(
+      `UPDATE broadcasts SET delay_seconds = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [safeDelay, id]
+    );
+
+    await broadcastQueueWorker.syncBroadcastCounters(id);
+    broadcastQueueWorker.emitProgress(id);
+
+    await logAudit(req.user!.id, 'BROADCAST_UPDATE_DELAY', 'broadcasts', { id, delaySeconds: safeDelay }, req.ip);
+    await logSystem('INFO', 'BLAST', `Jeda waktu broadcast #${id} diubah menjadi ${safeDelay} detik/pesan.`);
+
+    res.json({
+      success: true,
+      message: `Jeda pengiriman broadcast #${id} berhasil diubah menjadi ${safeDelay} detik per nomor.`,
+      data: { delaySeconds: safeDelay }
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: `Gagal mengubah jeda: ${err.message}` });
   }
 });
 
@@ -161,6 +193,8 @@ router.post('/:id/resume', async (req: Request, res: Response): Promise<void> =>
   const id = parseInt(String(req.params.id), 10);
   await broadcastQueueWorker.resumeBroadcast(id);
   await logAudit(req.user!.id, 'BROADCAST_RESUME', 'broadcasts', { id }, req.ip);
+  // Trigger cycle immediately
+  broadcastQueueWorker.processNextInQueue().catch((e) => console.error('Worker trigger error:', e));
   res.json({ success: true, message: 'Broadcast dilanjutkan.' });
 });
 
@@ -177,7 +211,75 @@ router.post('/:id/retry-failed', async (req: Request, res: Response): Promise<vo
   const id = parseInt(String(req.params.id), 10);
   const count = await broadcastQueueWorker.retryFailed(id);
   await logAudit(req.user!.id, 'BROADCAST_RETRY', 'broadcasts', { id, count }, req.ip);
+  broadcastQueueWorker.processNextInQueue().catch((e) => console.error('Worker trigger error:', e));
   res.json({ success: true, message: `${count} pesan gagal dimasukkan kembali ke antrean.` });
+});
+
+// POST /api/broadcasts/:id/recipients/:recipientId/send-now (Kirim / Kirim Ulang Langsung per kontak)
+router.post('/:id/recipients/:recipientId/send-now', async (req: Request, res: Response): Promise<void> => {
+  const broadcastId = parseInt(String(req.params.id), 10);
+  const recipientId = parseInt(String(req.params.recipientId), 10);
+  const { customMessage } = req.body;
+
+  try {
+    const recipient = await db.getOne<any>(
+      `SELECT r.*, b.media_id FROM broadcast_recipients r JOIN broadcasts b ON r.broadcast_id = b.id WHERE r.id = ? AND r.broadcast_id = ?`,
+      [recipientId, broadcastId]
+    );
+
+    if (!recipient) {
+      res.status(404).json({ success: false, message: 'Data penerima tidak ditemukan' });
+      return;
+    }
+
+    const messageToSend = customMessage || recipient.personalized_message;
+    let mediaPath: string | null = null;
+    if (recipient.media_id) {
+      const media = await db.getOne<{ storage_path: string }>(
+        `SELECT storage_path FROM media_files WHERE id = ?`,
+        [recipient.media_id]
+      );
+      if (media && media.storage_path) {
+        mediaPath = media.storage_path;
+      }
+    }
+
+    let result;
+    if (mediaPath) {
+      result = await whatsappService.sendImageMessage(recipient.phone_number, mediaPath, messageToSend);
+    } else {
+      result = await whatsappService.sendTextMessage(recipient.phone_number, messageToSend);
+    }
+
+    if (result.success) {
+      await db.execute(
+        `UPDATE broadcast_recipients 
+         SET status = 'sent', sent_at = CURRENT_TIMESTAMP, error_reason = NULL, attempts = attempts + 1
+         WHERE id = ?`,
+        [recipientId]
+      );
+      await db.execute(
+        `INSERT INTO outgoing_messages (broadcast_id, recipient_id, phone_number, message_type, content, media_path, status, baileys_message_id)
+         VALUES (?, ?, ?, ?, ?, ?, 'sent', ?)`,
+        [broadcastId, recipientId, recipient.phone_number, mediaPath ? 'image' : 'text', messageToSend, mediaPath, result.messageId]
+      );
+      await broadcastQueueWorker.syncBroadcastCounters(broadcastId);
+      broadcastQueueWorker.emitProgress(broadcastId);
+
+      await logAudit(req.user!.id, 'RECIPIENT_DIRECT_SEND', 'broadcast_recipients', { recipientId, phone: recipient.phone_number }, req.ip);
+      res.json({ success: true, message: `Pesan berhasil dikirim langsung ke ${recipient.phone_number}`, messageId: result.messageId });
+    } else {
+      await db.execute(
+        `UPDATE broadcast_recipients 
+         SET attempts = attempts + 1, error_reason = ? 
+         WHERE id = ?`,
+        [result.error || 'Gagal kirim via WhatsApp', recipientId]
+      );
+      res.status(500).json({ success: false, message: result.error || 'Gagal mengirim pesan WhatsApp' });
+    }
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: `Error: ${err.message}` });
+  }
 });
 
 // GET /api/broadcasts/:id/recipients (monitoring table with filters)

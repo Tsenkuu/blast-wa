@@ -67,6 +67,20 @@ class BroadcastQueueWorker {
             return;
         }
         // 1. Check if there are active broadcasts (running or scheduled)
+        // Selesaikan broadcast yang tidak memiliki penerima pending lagi agar tidak memblokir antrean
+        try {
+            const finishedBroadcasts = await index_js_1.db.query(`SELECT b.id, b.name FROM broadcasts b
+         WHERE b.status = 'running'
+           AND NOT EXISTS (
+             SELECT 1 FROM broadcast_recipients r WHERE r.broadcast_id = b.id AND r.status = 'pending'
+           )`);
+            for (const fb of finishedBroadcasts) {
+                await this.completeBroadcast(fb.id, fb.name);
+            }
+        }
+        catch (e) {
+            // safe ignore
+        }
         const activeBroadcast = await index_js_1.db.getOne(`SELECT * FROM broadcasts 
        WHERE status = 'running' 
           OR (status = 'queued' AND (scheduled_at IS NULL OR scheduled_at <= CURRENT_TIMESTAMP))
@@ -82,6 +96,10 @@ class BroadcastQueueWorker {
         }
         // 2. WhatsApp connection health check
         const waInfo = baileysService_js_1.whatsappService.getAccountInfo();
+        if (waInfo.status === 'connecting') {
+            // Sedang dalam proses handshake/koneksi Baileys, jangan dipause permanen, tunggu siklus berikutnya
+            return;
+        }
         if (waInfo.status !== 'connected') {
             await (0, logger_js_1.logSystem)('WARNING', 'BLAST', `Broadcast #${activeBroadcast.id} dijeda otomatis: WhatsApp tidak terhubung.`);
             await index_js_1.db.execute(`UPDATE broadcasts SET status = 'paused', paused_at = CURRENT_TIMESTAMP WHERE id = ?`, [activeBroadcast.id]);
@@ -130,15 +148,23 @@ class BroadcastQueueWorker {
             // Check Consent setting
             const consentSetting = await index_js_1.db.getOne(`SELECT value_text FROM app_settings WHERE key_name = 'consent_required'`);
             if (consentSetting && consentSetting.value_text === '1') {
-                const consent = await index_js_1.db.getOne(`SELECT status FROM contact_consents WHERE phone_number = ?`, [recipient.phone_number]);
+                const cleanDigits = recipient.phone_number.replace(/[^\d]/g, '');
+                const consent = await index_js_1.db.getOne(`SELECT status FROM contact_consents 
+           WHERE phone_number = ? OR phone_number LIKE ?`, [recipient.phone_number, `%${cleanDigits.slice(-9)}`]);
                 if (!consent || consent.status !== 'granted') {
-                    await index_js_1.db.execute(`UPDATE broadcast_recipients SET status = 'skipped', error_reason = 'Belum ada persetujuan (consent) penerima' WHERE id = ?`, [recipient.id]);
-                    await (0, logger_js_1.logSystem)('INFO', 'BLAST', `Pesan ke ${recipient.phone_number} dilewati: Tidak ada consent.`);
-                    await this.syncBroadcastCounters(activeBroadcast.id);
-                    this.emitProgress(activeBroadcast.id);
-                    this.isProcessing = false;
-                    this.currentRecipientInFlight = null;
-                    return;
+                    // Jika nomor terdaftar dalam dataset kontak resmi yang diupload, berikan persetujuan otomatis
+                    if (recipient.contact_id) {
+                        await index_js_1.db.execute(`INSERT INTO contact_consents (phone_number, status, source) VALUES (?, 'granted', 'Dataset Contact')`, [recipient.phone_number]);
+                    }
+                    else {
+                        await index_js_1.db.execute(`UPDATE broadcast_recipients SET status = 'skipped', error_reason = 'Belum ada persetujuan (consent) penerima' WHERE id = ?`, [recipient.id]);
+                        await (0, logger_js_1.logSystem)('INFO', 'BLAST', `Pesan ke ${recipient.phone_number} dilewati: Tidak ada consent.`);
+                        await this.syncBroadcastCounters(activeBroadcast.id);
+                        this.emitProgress(activeBroadcast.id);
+                        this.isProcessing = false;
+                        this.currentRecipientInFlight = null;
+                        return;
+                    }
                 }
             }
             // Prepare Media if present

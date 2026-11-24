@@ -40,8 +40,8 @@ class WhatsAppService {
         // Check if session was previously active in DB and attempt reconnection
         try {
             const activeSession = await index_js_1.db.getOne('SELECT id, status, is_active FROM whatsapp_sessions WHERE session_name = ?', ['default']);
-            if (activeSession && activeSession.status === 'connected' && activeSession.is_active === 1) {
-                (0, logger_js_1.logSystem)('INFO', 'WHATSAPP', 'Sesi sebelumnya terdeteksi aktif. Menyambungkan kembali...');
+            if (activeSession && activeSession.status !== 'logged_out') {
+                (0, logger_js_1.logSystem)('INFO', 'WHATSAPP', 'Sesi WhatsApp terdeteksi. Menyambungkan kembali...');
                 this.connect().catch((err) => {
                     (0, logger_js_1.logSystem)('WARNING', 'WHATSAPP', `Gagal menghubungkan sesi tersimpan: ${err.message}`);
                 });
@@ -74,9 +74,10 @@ class WhatsAppService {
              push_name = ?, 
              status = ?, 
              qr_code = ?, 
+             is_active = CASE WHEN ? = 'connected' THEN 1 WHEN ? = 'logged_out' THEN 0 ELSE is_active END,
              last_connected_at = CASE WHEN ? = 'connected' THEN CURRENT_TIMESTAMP ELSE last_connected_at END,
              updated_at = CURRENT_TIMESTAMP
-           WHERE session_name = ?`, [info.phone, info.name, info.status, info.qrCode, info.status, 'default']);
+           WHERE session_name = ?`, [info.phone, info.name, info.status, info.qrCode, info.status, info.status, info.status, 'default']);
             }
             else {
                 await index_js_1.db.execute(`INSERT INTO whatsapp_sessions (session_name, phone_number, push_name, status, qr_code, is_active) 
@@ -89,6 +90,19 @@ class WhatsAppService {
         if (info.status === 'connected') {
             await (0, logger_js_1.logSystem)('SUCCESS', 'WHATSAPP', `WhatsApp Terhubung: ${info.phone} (${info.name})`);
             this.notifyAdmins(`🟢 *NOTIFIKASI SISTEM*\n\nWhatsApp Bot berhasil TERHUBUNG!\nNomor: ${info.phone}\nNama: ${info.name}\nWaktu: ${new Date().toLocaleString('id-ID')}`);
+            // Auto-resume broadcast yang sempat dijeda karena WA disconnect
+            try {
+                const pausedBroadcasts = await index_js_1.db.query(`SELECT b.id FROM broadcasts b
+           WHERE b.status = 'paused' 
+             AND EXISTS (SELECT 1 FROM broadcast_recipients r WHERE r.broadcast_id = b.id AND r.status = 'pending')`);
+                for (const pb of pausedBroadcasts) {
+                    await index_js_1.db.execute(`UPDATE broadcasts SET status = 'running', paused_at = NULL WHERE id = ?`, [pb.id]);
+                    await (0, logger_js_1.logSystem)('INFO', 'BLAST', `Broadcast #${pb.id} dilanjutkan otomatis setelah WhatsApp terhubung.`);
+                }
+            }
+            catch (e) {
+                // ignore
+            }
         }
         else if (info.status === 'connecting' && info.qrCode) {
             await (0, logger_js_1.logSystem)('INFO', 'WHATSAPP', 'QR Code baru siap dipindai melalui WhatsApp di ponsel Anda.');

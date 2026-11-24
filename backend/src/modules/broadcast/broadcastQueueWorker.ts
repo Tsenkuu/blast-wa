@@ -81,6 +81,22 @@ class BroadcastQueueWorker {
     }
 
     // 1. Check if there are active broadcasts (running or scheduled)
+    // Selesaikan broadcast yang tidak memiliki penerima pending lagi agar tidak memblokir antrean
+    try {
+      const finishedBroadcasts = await db.query<{ id: number; name: string }>(
+        `SELECT b.id, b.name FROM broadcasts b
+         WHERE b.status = 'running'
+           AND NOT EXISTS (
+             SELECT 1 FROM broadcast_recipients r WHERE r.broadcast_id = b.id AND r.status = 'pending'
+           )`
+      );
+      for (const fb of finishedBroadcasts) {
+        await this.completeBroadcast(fb.id, fb.name);
+      }
+    } catch (e) {
+      // safe ignore
+    }
+
     const activeBroadcast = await db.getOne<{
       id: number;
       broadcast_code: string;
@@ -117,6 +133,10 @@ class BroadcastQueueWorker {
 
     // 2. WhatsApp connection health check
     const waInfo = whatsappService.getAccountInfo();
+    if (waInfo.status === 'connecting') {
+      // Sedang dalam proses handshake/koneksi Baileys, jangan dipause permanen, tunggu siklus berikutnya
+      return;
+    }
     if (waInfo.status !== 'connected') {
       await logSystem('WARNING', 'BLAST', `Broadcast #${activeBroadcast.id} dijeda otomatis: WhatsApp tidak terhubung.`);
       await db.execute(`UPDATE broadcasts SET status = 'paused', paused_at = CURRENT_TIMESTAMP WHERE id = ?`, [activeBroadcast.id]);
@@ -205,21 +225,31 @@ class BroadcastQueueWorker {
         `SELECT value_text FROM app_settings WHERE key_name = 'consent_required'`
       );
       if (consentSetting && consentSetting.value_text === '1') {
+        const cleanDigits = recipient.phone_number.replace(/[^\d]/g, '');
         const consent = await db.getOne<{ status: string }>(
-          `SELECT status FROM contact_consents WHERE phone_number = ?`,
-          [recipient.phone_number]
+          `SELECT status FROM contact_consents 
+           WHERE phone_number = ? OR phone_number LIKE ?`,
+          [recipient.phone_number, `%${cleanDigits.slice(-9)}`]
         );
         if (!consent || consent.status !== 'granted') {
-          await db.execute(
-            `UPDATE broadcast_recipients SET status = 'skipped', error_reason = 'Belum ada persetujuan (consent) penerima' WHERE id = ?`,
-            [recipient.id]
-          );
-          await logSystem('INFO', 'BLAST', `Pesan ke ${recipient.phone_number} dilewati: Tidak ada consent.`);
-          await this.syncBroadcastCounters(activeBroadcast.id);
-          this.emitProgress(activeBroadcast.id);
-          this.isProcessing = false;
-          this.currentRecipientInFlight = null;
-          return;
+          // Jika nomor terdaftar dalam dataset kontak resmi yang diupload, berikan persetujuan otomatis
+          if (recipient.contact_id) {
+            await db.execute(
+              `INSERT INTO contact_consents (phone_number, status, source) VALUES (?, 'granted', 'Dataset Contact')`,
+              [recipient.phone_number]
+            );
+          } else {
+            await db.execute(
+              `UPDATE broadcast_recipients SET status = 'skipped', error_reason = 'Belum ada persetujuan (consent) penerima' WHERE id = ?`,
+              [recipient.id]
+            );
+            await logSystem('INFO', 'BLAST', `Pesan ke ${recipient.phone_number} dilewati: Tidak ada consent.`);
+            await this.syncBroadcastCounters(activeBroadcast.id);
+            this.emitProgress(activeBroadcast.id);
+            this.isProcessing = false;
+            this.currentRecipientInFlight = null;
+            return;
+          }
         }
       }
 
