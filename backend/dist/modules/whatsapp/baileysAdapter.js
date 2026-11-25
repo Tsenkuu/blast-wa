@@ -193,8 +193,9 @@ class BaileysAdapter {
                 syncFullHistory: false,
                 connectTimeoutMs: 60000,
                 defaultQueryTimeoutMs: 60000,
-                keepAliveIntervalMs: 25000,
-                browser: baileys_1.Browsers.ubuntu('Chrome')
+                keepAliveIntervalMs: 30000, // 30 detik (lebih alami)
+                browser: baileys_1.Browsers.windows('Desktop'), // Fingerprint lebih umum
+                markOnlineOnConnect: false // Jangan langsung online (anti-deteksi bot)
             });
             this.socket.ev.on('creds.update', saveCreds);
             this.socket.ev.on('connection.update', async (update) => {
@@ -423,6 +424,20 @@ class BaileysAdapter {
             return { success: false, messageId: '', error: 'Format nomor telepon tidak valid' };
         }
         try {
+            // ANTI-BAN: Simulasi perilaku manusia sebelum mengirim pesan
+            try {
+                await this.socket.presenceSubscribe(jid);
+                await new Promise(res => setTimeout(res, 500 + Math.random() * 1000)); // 0.5-1.5 detik
+                await this.socket.sendPresenceUpdate('composing', jid);
+                // Simulasi mengetik: durasi proporsional dengan panjang pesan (min 1.5 detik, max 4 detik)
+                const typingDuration = Math.min(1500 + text.length * 15, 4000);
+                await new Promise(res => setTimeout(res, typingDuration));
+                await this.socket.sendPresenceUpdate('paused', jid);
+                await new Promise(res => setTimeout(res, 300 + Math.random() * 500));
+            }
+            catch (presenceErr) {
+                // Presence simulation gagal tidak apa-apa, lanjutkan kirim pesan
+            }
             const sent = await this.socket.sendMessage(jid, { text });
             return {
                 success: true,
@@ -450,6 +465,18 @@ class BaileysAdapter {
             return { success: false, messageId: '', error: 'File gambar tidak ditemukan di server' };
         }
         try {
+            // ANTI-BAN: Simulasi perilaku manusia sebelum mengirim gambar
+            try {
+                await this.socket.presenceSubscribe(jid);
+                await new Promise(res => setTimeout(res, 500 + Math.random() * 1000));
+                await this.socket.sendPresenceUpdate('composing', jid);
+                await new Promise(res => setTimeout(res, 2000 + Math.random() * 2000)); // 2-4 detik (memilih gambar)
+                await this.socket.sendPresenceUpdate('paused', jid);
+                await new Promise(res => setTimeout(res, 300 + Math.random() * 500));
+            }
+            catch (presenceErr) {
+                // Lanjutkan meskipun presence gagal
+            }
             const buffer = fs_1.default.readFileSync(imagePath);
             const sent = await this.socket.sendMessage(jid, {
                 image: buffer,

@@ -105,16 +105,23 @@ class WhatsAppService {
       await logSystem('SUCCESS', 'WHATSAPP', `WhatsApp Terhubung: ${info.phone} (${info.name})`);
       this.notifyAdmins(`🟢 *NOTIFIKASI SISTEM*\n\nWhatsApp Bot berhasil TERHUBUNG!\nNomor: ${info.phone}\nNama: ${info.name}\nWaktu: ${new Date().toLocaleString('id-ID')}`);
       
-      // Auto-resume broadcast yang sempat dijeda karena WA disconnect
+      // TIDAK auto-resume broadcast yang dijeda.
+      // Broadcast yang dijeda harus dilanjutkan secara MANUAL oleh admin melalui tombol Resume di dashboard.
+      // Ini mencegah blast berjalan tanpa sepengetahuan admin dan mengurangi risiko blokir WhatsApp.
       try {
-        const pausedBroadcasts = await db.query<{ id: number }>(
-          `SELECT b.id FROM broadcasts b
+        const pausedBroadcasts = await db.query<{ id: number; name: string }>(
+          `SELECT b.id, b.name FROM broadcasts b
            WHERE b.status = 'paused' 
              AND EXISTS (SELECT 1 FROM broadcast_recipients r WHERE r.broadcast_id = b.id AND r.status = 'pending')`
         );
-        for (const pb of pausedBroadcasts) {
-          await db.execute(`UPDATE broadcasts SET status = 'running', paused_at = NULL WHERE id = ?`, [pb.id]);
-          await logSystem('INFO', 'BLAST', `Broadcast #${pb.id} dilanjutkan otomatis setelah WhatsApp terhubung.`);
+        if (pausedBroadcasts.length > 0) {
+          const names = pausedBroadcasts.map(b => `#${b.id} (${b.name})`).join(', ');
+          await logSystem('INFO', 'BLAST', `${pausedBroadcasts.length} broadcast masih dijeda: ${names}. Silakan resume manual dari dashboard jika siap.`);
+          this.notifyAdmins(
+            `ℹ️ *INFO BROADCAST*\n\n` +
+            `Ada ${pausedBroadcasts.length} broadcast yang masih dijeda:\n${names}\n\n` +
+            `Silakan buka dashboard dan klik Resume jika ingin melanjutkan pengiriman.`
+          );
         }
       } catch (e) {
         // ignore

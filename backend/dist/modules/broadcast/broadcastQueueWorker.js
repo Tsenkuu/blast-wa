@@ -10,16 +10,20 @@ class BroadcastQueueWorker {
     workerInterval = null;
     currentRecipientInFlight = null;
     isShuttingDown = false;
+    // Anti-ban: tracking pengiriman per jam
+    sentTimestamps = [];
+    MAX_MESSAGES_PER_HOUR = 80; // Batas aman per jam (jangan terlalu banyak!)
+    HOURLY_COOLDOWN_MS = 5 * 60 * 1000; // Istirahat 5 menit jika limit tercapai
     async start() {
         (0, logger_js_1.logSystem)('INFO', 'WORKER', 'Memulai Broadcast Queue Worker...');
         // Recovery on boot: reset dangling 'processing' status to 'pending'
         await this.recoverDanglingMessages();
-        // Start polling loop every 1.5 seconds
+        // Start polling loop every 3 seconds (lebih lambat agar tidak terlalu agresif)
         this.workerInterval = setInterval(() => {
             this.processNextInQueue().catch((err) => {
                 console.error('Error in BroadcastQueueWorker cycle:', err);
             });
-        }, 1500);
+        }, 3000);
     }
     async stop() {
         this.isShuttingDown = true;
@@ -64,6 +68,21 @@ class BroadcastQueueWorker {
         if (emergencySetting && emergencySetting.value_text === '1') {
             // Pause all running broadcasts
             await index_js_1.db.execute(`UPDATE broadcasts SET status = 'paused', paused_at = CURRENT_TIMESTAMP WHERE status = 'running'`);
+            return;
+        }
+        // ===== ANTI-BAN: Rate limiter per jam =====
+        // Bersihkan timestamp pengiriman yang sudah lebih dari 1 jam
+        const oneHourAgo = Date.now() - 60 * 60 * 1000;
+        this.sentTimestamps = this.sentTimestamps.filter(t => t > oneHourAgo);
+        if (this.sentTimestamps.length >= this.MAX_MESSAGES_PER_HOUR) {
+            // Sudah mencapai batas per jam, istirahat dulu
+            if (!this.isProcessing) {
+                this.isProcessing = true;
+                const cooldownMin = Math.round(this.HOURLY_COOLDOWN_MS / 60000);
+                await (0, logger_js_1.logSystem)('WARNING', 'BLAST', `⏳ Anti-Ban: Sudah mengirim ${this.sentTimestamps.length} pesan dalam 1 jam terakhir. Istirahat ${cooldownMin} menit untuk mencegah blokir WhatsApp...`);
+                await this.sleep(this.HOURLY_COOLDOWN_MS);
+                this.isProcessing = false;
+            }
             return;
         }
         // 1. Check if there are active broadcasts (running or scheduled)
@@ -221,7 +240,12 @@ class BroadcastQueueWorker {
             }
             await this.syncBroadcastCounters(activeBroadcast.id);
             this.emitProgress(activeBroadcast.id);
-            // Delay rate limiting per message (anti-ban delay from Settings or Broadcast custom delay)
+            // ===== ANTI-BAN DELAY SYSTEM =====
+            // Catat timestamp pengiriman berhasil untuk rate limiter per jam
+            if (sendResult.success) {
+                this.sentTimestamps.push(Date.now());
+            }
+            // Ambil delay global dari pengaturan
             let globalMinMs = index_js_2.config.queue.minDelayMs;
             let globalMaxMs = index_js_2.config.queue.maxDelayMs;
             try {
@@ -230,7 +254,7 @@ class BroadcastQueueWorker {
                 if (minRow && minRow.value_text) {
                     const parsed = parseInt(minRow.value_text, 10);
                     if (!isNaN(parsed) && parsed > 0) {
-                        // Auto-detect: jika user input <= 300, itu adalah detik (contoh: 60 = 60 detik). Jika > 300, sudah ms (contoh: 60000 = 60 detik).
+                        // Auto-detect: jika user input <= 300, itu adalah detik (contoh: 60 = 60 detik). Jika > 300, sudah ms.
                         globalMinMs = parsed <= 300 ? parsed * 1000 : parsed;
                     }
                 }
@@ -247,12 +271,28 @@ class BroadcastQueueWorker {
             if (globalMaxMs < globalMinMs) {
                 globalMaxMs = globalMinMs;
             }
-            let delay = this.getRandomDelay(globalMinMs, globalMaxMs);
-            // If active broadcast has its own delay_seconds
+            // ANTI-BAN: Minimum delay yang aman adalah 8 detik per pesan
+            const ABSOLUTE_MIN_DELAY_MS = 8000;
+            globalMinMs = Math.max(globalMinMs, ABSOLUTE_MIN_DELAY_MS);
+            globalMaxMs = Math.max(globalMaxMs, globalMinMs);
+            let baseDelay = this.getRandomDelay(globalMinMs, globalMaxMs);
+            // Jika broadcast memiliki delay_seconds custom, gunakan itu (tapi tetap di atas batas aman)
             if (activeBroadcast.delay_seconds !== undefined && activeBroadcast.delay_seconds !== null && activeBroadcast.delay_seconds > 0) {
                 const bcastDelayMs = activeBroadcast.delay_seconds * 1000;
-                // Prioritaskan nilai jeda yang lebih besar antara setting broadcast dan setting global
-                delay = Math.max(bcastDelayMs, globalMinMs);
+                baseDelay = Math.max(bcastDelayMs, ABSOLUTE_MIN_DELAY_MS);
+            }
+            // ANTI-BAN: Tambahkan variasi acak ±30% agar pola tidak terdeteksi sebagai bot
+            const variation = Math.random() * 0.6 - 0.3; // -30% sampai +30%
+            let delay = Math.round(baseDelay * (1 + variation));
+            delay = Math.max(delay, ABSOLUTE_MIN_DELAY_MS); // Jangan pernah di bawah batas aman
+            // ANTI-BAN: Setiap 15-25 pesan, tambahkan jeda panjang (istirahat mikro) 30-90 detik
+            const sentInSession = this.sentTimestamps.filter(t => t > Date.now() - 30 * 60 * 1000).length;
+            const microBreakInterval = this.getRandomDelay(15, 25);
+            if (sentInSession > 0 && sentInSession % microBreakInterval === 0) {
+                const microBreakMs = this.getRandomDelay(30000, 90000);
+                const microBreakSec = Math.round(microBreakMs / 1000);
+                await (0, logger_js_1.logSystem)('INFO', 'BLAST', `🛡️ Anti-Ban: Istirahat mikro ${microBreakSec} detik setelah ${sentInSession} pesan (pola manusiawi)...`);
+                delay += microBreakMs;
             }
             // If test mode with minDelayMs === 0, keep it 0
             if (index_js_2.config.queue.minDelayMs === 0) {
@@ -260,7 +300,7 @@ class BroadcastQueueWorker {
             }
             if (delay > 0) {
                 const delaySec = Math.round(delay / 1000);
-                await (0, logger_js_1.logSystem)('INFO', 'BLAST', `Menunggu jeda ${delaySec} detik sebelum pengiriman ke nomor berikutnya...`);
+                await (0, logger_js_1.logSystem)('INFO', 'BLAST', `⏱️ Jeda ${delaySec} detik sebelum nomor berikutnya...`);
                 await this.sleep(delay);
             }
         }

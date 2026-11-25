@@ -31,8 +31,8 @@ exports.config = {
         maxFileSizeMb: parseInt(process.env.MAX_FILE_SIZE_MB || '15', 10)
     },
     queue: {
-        minDelayMs: parseInt(process.env.MESSAGE_DELAY_MIN_MS || '3000', 10),
-        maxDelayMs: parseInt(process.env.MESSAGE_DELAY_MAX_MS || '6000', 10),
+        minDelayMs: parseInt(process.env.MESSAGE_DELAY_MIN_MS || '10000', 10), // Default 10 detik (lebih aman)
+        maxDelayMs: parseInt(process.env.MESSAGE_DELAY_MAX_MS || '20000', 10), // Default 20 detik
         maxRetries: parseInt(process.env.MAX_RETRY_LIMIT || '2', 10),
         circuitBreakerFailStreak: parseInt(process.env.CIRCUIT_BREAKER_FAIL_STREAK || '5', 10),
         circuitBreakerFailRate: parseFloat(process.env.CIRCUIT_BREAKER_FAIL_RATE || '0.25')
